@@ -6,7 +6,7 @@ import {CustomValueMap, properties} from './properties';
 import {createIssueMapping, syncNotionDBWithGitHub} from './sync';
 import {Octokit} from 'octokit';
 import {markdownToRichText} from '@tryfabric/martian';
-import {CustomTypes, RichTextItemResponse} from './api-types';
+import {CustomTypes} from './api-types';
 import {CreatePageParameters} from '@notionhq/client/build/src/api-endpoints';
 
 function removeHTML(text?: string): string {
@@ -33,90 +33,20 @@ function preprocessMarkdown(text: string): string {
 
 interface PayloadParsingOptions {
   payload: IssuesEvent;
-  octokit: Octokit;
-  possibleProject?: ProjectData;
 }
 async function parsePropertiesFromPayload(options: PayloadParsingOptions): Promise<CustomValueMap> {
-  const {payload, octokit, possibleProject} = options;
-
-  payload.issue.labels?.map(label => label.color);
-
-  const projectData = await getProjectData({
-    octokit,
-    githubRepo: payload.repository.full_name,
-    issueNumber: payload.issue.number,
-    possible: possibleProject,
-  });
-
-  core.debug(`Current project data: ${JSON.stringify(projectData, null, 2)}`);
+  const {payload} = options;
 
   const result: CustomValueMap = {
     Name: properties.title(payload.issue.title),
     Status: properties.getStatusSelectOption(payload.issue.state!),
-    Organization: properties.text(payload.organization?.login ?? ''),
-    Repository: properties.text(payload.repository.name),
-    Number: properties.number(payload.issue.number),
     Body: properties.richText(parseBodyRichText(payload.issue.body)),
     Assignees: properties.multiSelect(payload.issue.assignees.map(assignee => assignee.login)),
-    Milestone: properties.text(payload.issue.milestone?.title ?? ''),
-    Labels: properties.multiSelect(payload.issue.labels?.map(label => label.name) ?? []),
-    Author: properties.text(payload.issue.user.login),
-    Created: properties.date(payload.issue.created_at),
-    Updated: properties.date(payload.issue.updated_at),
-    ID: properties.number(payload.issue.id),
+    Reviewer: properties.multiSelect([]),
     Link: properties.url(payload.issue.html_url),
-    Project: properties.text(projectData?.name || ''),
-    'Project Column': properties.text(projectData?.columnName || ''),
   };
 
   return result;
-}
-
-interface ProjectData {
-  name?: string;
-  columnName?: string;
-}
-interface GetProjectDataOptions {
-  octokit: Octokit;
-  githubRepo: string;
-  issueNumber: number;
-  possible?: ProjectData;
-}
-export async function getProjectData(
-  options: GetProjectDataOptions
-): Promise<ProjectData | undefined> {
-  const {octokit, githubRepo, issueNumber, possible} = options;
-
-  const projects =
-    (
-      await octokit.rest.projects.listForRepo({
-        owner: githubRepo.split('/')[0],
-        repo: githubRepo.split('/')[1],
-      })
-    ).data || [];
-  projects.sort(p => (p.name === possible?.name ? -1 : 1));
-
-  core.debug(`Found ${projects.length} projects.`);
-
-  for (const project of projects) {
-    const columns = (await octokit.rest.projects.listColumns({project_id: project.id})).data || [];
-    if (possible?.name === project.name)
-      columns.sort(c => (c.name === possible.columnName ? -1 : 1));
-
-    for (const column of columns) {
-      const cards = (await octokit.rest.projects.listCards({column_id: column.id})).data,
-        card =
-          cards && cards.find(c => Number(c.content_url?.split('/issues/')[1]) === issueNumber);
-
-      if (card)
-        return {
-          name: project.name,
-          columnName: column.name,
-        };
-    }
-  }
-
-  return undefined;
 }
 
 export function parseBodyRichText(body: string): CustomTypes.RichText['rich_text'] {
@@ -168,7 +98,6 @@ interface IssueOpenedOptions {
     databaseId: string;
   };
   payload: IssuesOpenedEvent;
-  octokit: Octokit;
 }
 
 async function handleIssueOpened(options: IssueOpenedOptions) {
@@ -182,7 +111,6 @@ async function handleIssueOpened(options: IssueOpenedOptions) {
     },
     properties: await parsePropertiesFromPayload({
       payload,
-      octokit: options.octokit,
     }),
     children: getBodyChildrenBlocks(payload.issue.body),
   });
@@ -194,11 +122,10 @@ interface IssueEditedOptions {
     databaseId: string;
   };
   payload: IssuesEvent;
-  octokit: Octokit;
 }
 
 async function handleIssueEdited(options: IssueEditedOptions) {
-  const {notion, payload, octokit} = options;
+  const {notion, payload} = options;
 
   core.info(`Querying database for page with github id ${payload.issue.id}`);
 
@@ -223,7 +150,7 @@ async function handleIssueEdited(options: IssueEditedOptions) {
 
     await notion.client.pages.update({
       page_id: pageId,
-      properties: await parsePropertiesFromPayload({payload, octokit}),
+      properties: await parsePropertiesFromPayload({payload}),
     });
 
     const existingBlocks = (
@@ -262,24 +189,12 @@ async function handleIssueEdited(options: IssueEditedOptions) {
       parent: {
         database_id: notion.databaseId,
       },
-      properties: await parsePropertiesFromPayload({payload, octokit}),
+      properties: await parsePropertiesFromPayload({payload}),
       children: bodyBlocks,
     });
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const result = query.results[0] as any,
-    pageId = result.id,
-    possible: ProjectData | undefined = result
-      ? {
-          name: ((result.properties as CustomValueMap).Project.rich_text[0] as RichTextItemResponse)
-            ?.plain_text,
-          columnName: (
-            (result.properties as CustomValueMap)['Project Column']
-              .rich_text[0] as RichTextItemResponse
-          )?.plain_text,
-        }
-      : undefined;
+  const pageId = query.results[0].id;
 
   core.info(`Query successful: Page ${pageId}`);
   core.info(`Updating page for issue #${payload.issue.number}`);
@@ -288,8 +203,6 @@ async function handleIssueEdited(options: IssueEditedOptions) {
     page_id: pageId,
     properties: await parsePropertiesFromPayload({
       payload,
-      octokit: options.octokit,
-      possibleProject: possible,
     }),
   });
 }
@@ -329,7 +242,6 @@ export async function run(options: Options) {
         databaseId: notion.databaseId,
       },
       payload: github.payload as IssuesOpenedEvent,
-      octokit,
     });
   } else if (github.eventName === 'workflow_dispatch') {
     try {
@@ -355,7 +267,6 @@ export async function run(options: Options) {
         databaseId: notion.databaseId,
       },
       payload: github.payload as IssuesEvent,
-      octokit,
     });
   }
 

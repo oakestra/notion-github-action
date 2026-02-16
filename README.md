@@ -52,7 +52,7 @@ jobs:
     name: Add GitHub Issues to Notion
     steps:
       - name: Add GitHub Issues to Notion
-        uses: tryfabric/notion-github-action@v1
+        uses: oakestra/notion-github-action@v1
         with:
           notion-token: ${{ secrets.NOTION_TOKEN }}
           notion-db: ${{ secrets.NOTION_DATABASE }}
@@ -61,6 +61,27 @@ jobs:
 8. (Optional) If your Github repository has any preexisting issues that you would like to sync to your new Notion Database you can trigger a manual workflow. Make sure your organization's default `GITHUB_TOKEN` has [read and write permissions](https://docs.github.com/en/organizations/managing-organization-settings/disabling-or-limiting-github-actions-for-your-organization#setting-the-permissions-of-the-github_token-for-your-organization) then follow [these intructions](https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow) to run the `Notion Job` workflow.
 
 _Note: The manual workflow will only work on Notion Databases created from the templated linked above._
+
+## Notion Database Schema
+
+The action syncs GitHub issues to your Notion database. Your database must have the following columns:
+
+| Column Name | Property Type | Description |
+|---|---|---|
+| **Name** | Title | The title of the GitHub issue |
+| **Status** | Select | The status of the issue (`Open` or `Closed`) |
+| **Body** | Rich Text | The issue description/body content with markdown support |
+| **Assignees** | Multi-select | People assigned to the issue |
+| **Reviewer** | Multi-select | Reviewers (Note: currently not populated from GitHub issues) |
+| **Link** | URL | Direct link to the GitHub issue |
+
+### Creating a Notion Database
+
+You can create the database manually with these columns, or:
+
+1.Create a new Notion database with the schema above
+
+Make sure your Notion integration has read and write access to the database.
 
 ## Using `release-it`
 

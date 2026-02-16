@@ -4,20 +4,10 @@ import {common} from './common';
 export type CustomValueMap = {
   Name: CustomTypes.Title;
   Status: CustomTypes.Select;
-  Organization: CustomTypes.RichText;
-  Repository: CustomTypes.RichText;
-  Number: CustomTypes.Number;
   Body: CustomTypes.RichText;
   Assignees: CustomTypes.MultiSelect;
-  Milestone: CustomTypes.RichText;
-  Labels: CustomTypes.MultiSelect;
-  Author: CustomTypes.RichText;
-  Created: CustomTypes.Date;
-  Updated: CustomTypes.Date;
-  ID: CustomTypes.Number;
+  Reviewer: CustomTypes.MultiSelect;
   Link: CustomTypes.URL;
-  Project: CustomTypes.RichText;
-  'Project Column': CustomTypes.RichText;
 };
 
 export namespace properties {
