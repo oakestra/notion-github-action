@@ -32500,7 +32500,6 @@ var __asyncValues = (undefined && undefined.__asyncValues) || function (o) {
 
 
 
-
 function createIssueMapping(notion, databaseId) {
     return __awaiter(this, void 0, void 0, function* () {
         const issuePageIds = new Map();
@@ -32519,7 +32518,7 @@ function syncNotionDBWithGitHub(issuePageIds, octokit, notion, databaseId, githu
             core.info(`Found ${issues.length} total issues in GitHub`);
             const pagesToCreate = getIssuesNotInNotion(issuePageIds, issues);
             core.info(`${pagesToCreate.length} issues need to be added to Notion`);
-            yield createPages(notion, databaseId, pagesToCreate, octokit);
+            yield createPages(notion, databaseId, pagesToCreate);
             core.info('Sync completed successfully');
         }
         catch (error) {
@@ -32615,7 +32614,7 @@ function getIssuesNotInNotion(issuePageIds, issues) {
     return pagesToCreate;
 }
 // Notion SDK for JS: https://developers.notion.com/reference/post-page
-function createPages(notion, databaseId, pagesToCreate, octokit) {
+function createPages(notion, databaseId, pagesToCreate) {
     return __awaiter(this, void 0, void 0, function* () {
         core.info('Adding Github Issues to Notion...');
         core.info(`Creating ${pagesToCreate.length} pages in Notion database`);
@@ -32628,7 +32627,7 @@ function createPages(notion, databaseId, pagesToCreate, octokit) {
                 core.debug(`Creating page for issue #${issue.number}: ${issue.title}`);
                 yield notion.pages.create({
                     parent: { database_id: databaseId },
-                    properties: yield getPropertiesFromIssue(issue, octokit),
+                    properties: yield getPropertiesFromIssue(issue),
                 });
                 core.info(`Successfully created page for issue #${issue.number}`);
             }
@@ -32658,38 +32657,18 @@ function createMultiSelectObjects(issue) {
     const labelsObject = (_a = issue.labels) === null || _a === void 0 ? void 0 : _a.map((label) => label.name);
     return { assigneesObject, labelsObject };
 }
-function getPropertiesFromIssue(issue, octokit) {
+function getPropertiesFromIssue(issue) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            const { number, title, state, id, milestone, created_at, updated_at, body, repository_url, user, html_url, } = issue;
-            const author = user === null || user === void 0 ? void 0 : user.login;
-            const { assigneesObject, labelsObject } = createMultiSelectObjects(issue);
-            const urlComponents = repository_url.split('/');
-            const org = urlComponents[urlComponents.length - 2];
-            const repo = urlComponents[urlComponents.length - 1];
-            const projectData = yield getProjectData({
-                octokit,
-                githubRepo: `${org}/${repo}`,
-                issueNumber: issue.number,
-            });
-            // These properties are specific to the template DB referenced in the README.
+            const { title, state, body, html_url, } = issue;
+            const { assigneesObject } = createMultiSelectObjects(issue);
             return {
                 Name: properties.title(title),
                 Status: properties.getStatusSelectOption(state),
-                Organization: properties.text(org),
-                Repository: properties.text(repo),
                 Body: properties.richText(parseBodyRichText(body || '')),
-                Number: properties.number(number),
                 Assignees: properties.multiSelect(assigneesObject),
-                Milestone: properties.text(milestone ? milestone.title : ''),
-                Labels: properties.multiSelect(labelsObject ? labelsObject : []),
-                Author: properties.text(author),
-                Created: properties.date(created_at),
-                Updated: properties.date(updated_at),
-                ID: properties.number(id),
+                Reviewer: properties.multiSelect([]),
                 Link: properties.url(html_url),
-                Project: properties.text((projectData === null || projectData === void 0 ? void 0 : projectData.name) || ''),
-                'Project Column': properties.text((projectData === null || projectData === void 0 ? void 0 : projectData.columnName) || ''),
             };
         }
         catch (error) {
@@ -32739,61 +32718,17 @@ function preprocessMarkdown(text) {
     return text;
 }
 function parsePropertiesFromPayload(options) {
-    var _a, _b, _c, _d, _e, _f, _g;
     return action_awaiter(this, void 0, void 0, function* () {
-        const { payload, octokit, possibleProject } = options;
-        (_a = payload.issue.labels) === null || _a === void 0 ? void 0 : _a.map(label => label.color);
-        const projectData = yield getProjectData({
-            octokit,
-            githubRepo: payload.repository.full_name,
-            issueNumber: payload.issue.number,
-            possible: possibleProject,
-        });
-        core.debug(`Current project data: ${JSON.stringify(projectData, null, 2)}`);
+        const { payload } = options;
         const result = {
             Name: properties.title(payload.issue.title),
             Status: properties.getStatusSelectOption(payload.issue.state),
-            Organization: properties.text((_c = (_b = payload.organization) === null || _b === void 0 ? void 0 : _b.login) !== null && _c !== void 0 ? _c : ''),
-            Repository: properties.text(payload.repository.name),
-            Number: properties.number(payload.issue.number),
             Body: properties.richText(parseBodyRichText(payload.issue.body)),
             Assignees: properties.multiSelect(payload.issue.assignees.map(assignee => assignee.login)),
-            Milestone: properties.text((_e = (_d = payload.issue.milestone) === null || _d === void 0 ? void 0 : _d.title) !== null && _e !== void 0 ? _e : ''),
-            Labels: properties.multiSelect((_g = (_f = payload.issue.labels) === null || _f === void 0 ? void 0 : _f.map(label => label.name)) !== null && _g !== void 0 ? _g : []),
-            Author: properties.text(payload.issue.user.login),
-            Created: properties.date(payload.issue.created_at),
-            Updated: properties.date(payload.issue.updated_at),
-            ID: properties.number(payload.issue.id),
+            Reviewer: properties.multiSelect([]),
             Link: properties.url(payload.issue.html_url),
-            Project: properties.text((projectData === null || projectData === void 0 ? void 0 : projectData.name) || ''),
-            'Project Column': properties.text((projectData === null || projectData === void 0 ? void 0 : projectData.columnName) || ''),
         };
         return result;
-    });
-}
-function getProjectData(options) {
-    return action_awaiter(this, void 0, void 0, function* () {
-        const { octokit, githubRepo, issueNumber, possible } = options;
-        const projects = (yield octokit.rest.projects.listForRepo({
-            owner: githubRepo.split('/')[0],
-            repo: githubRepo.split('/')[1],
-        })).data || [];
-        projects.sort(p => (p.name === (possible === null || possible === void 0 ? void 0 : possible.name) ? -1 : 1));
-        core.debug(`Found ${projects.length} projects.`);
-        for (const project of projects) {
-            const columns = (yield octokit.rest.projects.listColumns({ project_id: project.id })).data || [];
-            if ((possible === null || possible === void 0 ? void 0 : possible.name) === project.name)
-                columns.sort(c => (c.name === possible.columnName ? -1 : 1));
-            for (const column of columns) {
-                const cards = (yield octokit.rest.projects.listCards({ column_id: column.id })).data, card = cards && cards.find(c => { var _a; return Number((_a = c.content_url) === null || _a === void 0 ? void 0 : _a.split('/issues/')[1]) === issueNumber; });
-                if (card)
-                    return {
-                        name: project.name,
-                        columnName: column.name,
-                    };
-            }
-        }
-        return undefined;
     });
 }
 function parseBodyRichText(body) {
@@ -32848,16 +32783,14 @@ function handleIssueOpened(options) {
             },
             properties: yield parsePropertiesFromPayload({
                 payload,
-                octokit: options.octokit,
             }),
             children: getBodyChildrenBlocks(payload.issue.body),
         });
     });
 }
 function handleIssueEdited(options) {
-    var _a, _b;
     return action_awaiter(this, void 0, void 0, function* () {
-        const { notion, payload, octokit } = options;
+        const { notion, payload } = options;
         core.info(`Querying database for page with github id ${payload.issue.id}`);
         const query = yield notion.client.databases.query({
             database_id: notion.databaseId,
@@ -32876,7 +32809,7 @@ function handleIssueEdited(options) {
             core.info(`Updating page for issue #${payload.issue.number}`);
             yield notion.client.pages.update({
                 page_id: pageId,
-                properties: yield parsePropertiesFromPayload({ payload, octokit }),
+                properties: yield parsePropertiesFromPayload({ payload }),
             });
             const existingBlocks = (yield notion.client.blocks.children.list({
                 block_id: pageId,
@@ -32901,26 +32834,17 @@ function handleIssueEdited(options) {
                 parent: {
                     database_id: notion.databaseId,
                 },
-                properties: yield parsePropertiesFromPayload({ payload, octokit }),
+                properties: yield parsePropertiesFromPayload({ payload }),
                 children: bodyBlocks,
             });
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result = query.results[0], pageId = result.id, possible = result
-            ? {
-                name: (_a = result.properties.Project.rich_text[0]) === null || _a === void 0 ? void 0 : _a.plain_text,
-                columnName: (_b = result.properties['Project Column']
-                    .rich_text[0]) === null || _b === void 0 ? void 0 : _b.plain_text,
-            }
-            : undefined;
+        const pageId = query.results[0].id;
         core.info(`Query successful: Page ${pageId}`);
         core.info(`Updating page for issue #${payload.issue.number}`);
         yield notion.client.pages.update({
             page_id: pageId,
             properties: yield parsePropertiesFromPayload({
                 payload,
-                octokit: options.octokit,
-                possibleProject: possible,
             }),
         });
     });
@@ -32946,7 +32870,6 @@ function run(options) {
                     databaseId: notion.databaseId,
                 },
                 payload: github.payload,
-                octokit,
             });
         }
         else if (github.eventName === 'workflow_dispatch') {
@@ -32974,7 +32897,6 @@ function run(options) {
                     databaseId: notion.databaseId,
                 },
                 payload: github.payload,
-                octokit,
             });
         }
         core.info('Complete!');

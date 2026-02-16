@@ -3,7 +3,6 @@ import {Issue} from '@octokit/webhooks-types/schema';
 import * as core from '@actions/core';
 import {Octokit} from 'octokit';
 import {CustomValueMap, properties} from './properties';
-import {getProjectData} from './action';
 import {QueryDatabaseResponse} from '@notionhq/client/build/src/api-endpoints';
 import {CustomTypes} from './api-types';
 import {parseBodyRichText} from './action';
@@ -43,7 +42,7 @@ export async function syncNotionDBWithGitHub(
     const pagesToCreate = getIssuesNotInNotion(issuePageIds, issues);
     core.info(`${pagesToCreate.length} issues need to be added to Notion`);
     
-    await createPages(notion, databaseId, pagesToCreate, octokit);
+    await createPages(notion, databaseId, pagesToCreate);
     core.info('Sync completed successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -134,8 +133,7 @@ function getIssuesNotInNotion(issuePageIds: Map<number, string>, issues: Issue[]
 async function createPages(
   notion: Client,
   databaseId: string,
-  pagesToCreate: Issue[],
-  octokit: Octokit
+  pagesToCreate: Issue[]
 ): Promise<void> {
   core.info('Adding Github Issues to Notion...');
   core.info(`Creating ${pagesToCreate.length} pages in Notion database`);
@@ -151,7 +149,7 @@ async function createPages(
         core.debug(`Creating page for issue #${issue.number}: ${issue.title}`);
         await notion.pages.create({
           parent: {database_id: databaseId},
-          properties: await getPropertiesFromIssue(issue, octokit),
+          properties: await getPropertiesFromIssue(issue),
         });
         core.info(`Successfully created page for issue #${issue.number}`);
       } catch (error) {
@@ -185,51 +183,23 @@ function createMultiSelectObjects(issue: Issue): {
   return {assigneesObject, labelsObject};
 }
 
-async function getPropertiesFromIssue(issue: Issue, octokit: Octokit): Promise<CustomValueMap> {
+async function getPropertiesFromIssue(issue: Issue): Promise<CustomValueMap> {
   try {
     const {
-      number,
       title,
       state,
-      id,
-      milestone,
-      created_at,
-      updated_at,
       body,
-      repository_url,
-      user,
       html_url,
     } = issue;
-    const author = user?.login;
-    const {assigneesObject, labelsObject} = createMultiSelectObjects(issue);
-    const urlComponents = repository_url.split('/');
-    const org = urlComponents[urlComponents.length - 2];
-    const repo = urlComponents[urlComponents.length - 1];
+    const {assigneesObject} = createMultiSelectObjects(issue);
 
-    const projectData = await getProjectData({
-      octokit,
-      githubRepo: `${org}/${repo}`,
-      issueNumber: issue.number,
-    });
-
-    // These properties are specific to the template DB referenced in the README.
     return {
       Name: properties.title(title),
       Status: properties.getStatusSelectOption(state!),
-      Organization: properties.text(org),
-      Repository: properties.text(repo),
       Body: properties.richText(parseBodyRichText(body || '')),
-      Number: properties.number(number),
       Assignees: properties.multiSelect(assigneesObject),
-      Milestone: properties.text(milestone ? milestone.title : ''),
-      Labels: properties.multiSelect(labelsObject ? labelsObject : []),
-      Author: properties.text(author),
-      Created: properties.date(created_at),
-      Updated: properties.date(updated_at),
-      ID: properties.number(id),
+      Reviewer: properties.multiSelect([]),
       Link: properties.url(html_url),
-      Project: properties.text(projectData?.name || ''),
-      'Project Column': properties.text(projectData?.columnName || ''),
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
