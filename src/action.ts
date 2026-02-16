@@ -10,7 +10,25 @@ import {CustomTypes, RichTextItemResponse} from './api-types';
 import {CreatePageParameters} from '@notionhq/client/build/src/api-endpoints';
 
 function removeHTML(text?: string): string {
-  return text?.replace(/<.*>.*<\/.*>/g, '') ?? '';
+  if (!text) return '';
+  // Remove all HTML tags (both paired and self-closing)
+  return text
+    .replace(/<[^>]+>/g, '')  // Remove all HTML tags
+    .replace(/\n\s*\n/g, '\n') // Normalize multiple newlines to single newlines
+    .trim();
+}
+
+function preprocessMarkdown(text: string): string {
+  // Remove HTML comments
+  text = text.replace(/<!--[\s\S]*?-->/g, '');
+  
+  // Convert heading markdown to bold text (e.g., "## Heading" -> "**Heading**")
+  text = text.replace(/^#+\s+(.+)$/gm, '**$1**');
+  
+  // Handle markdown images [alt](url) by replacing with just the alt text
+  text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1 (image)');
+  
+  return text;
 }
 
 interface PayloadParsingOptions {
@@ -101,10 +119,33 @@ export async function getProjectData(
   return undefined;
 }
 
-export function parseBodyRichText(body: string) {
+export function parseBodyRichText(body: string): CustomTypes.RichText['rich_text'] {
   try {
-    return markdownToRichText(removeHTML(body)) as CustomTypes.RichText['rich_text'];
-  } catch {
+    const cleanBody = removeHTML(body);
+    const processedBody = preprocessMarkdown(cleanBody);
+    return markdownToRichText(processedBody) as CustomTypes.RichText['rich_text'];
+  } catch (error) {
+    core.warning(`Failed to parse markdown: ${error instanceof Error ? error.message : String(error)}`);
+    // Fallback: return the text content as plain rich text
+    const cleanBody = removeHTML(body);
+    if (cleanBody.length > 0) {
+      return [
+        {
+          type: 'text',
+          text: {
+            content: cleanBody.substring(0, 2000), // Notion has a 2000 char limit per block
+          },
+          annotations: {
+            bold: false,
+            strikethrough: false,
+            underline: false,
+            italic: false,
+            code: false,
+            color: 'default',
+          },
+        } as unknown as CustomTypes.RichText['rich_text'][0],
+      ];
+    }
     return [];
   }
 }
