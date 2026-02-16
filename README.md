@@ -93,4 +93,4 @@ Release-It will then automatically generate a GitHub release with the changelog 
 
 ---
 
-Built with 💙 by the team behind [Fabric](https://tryfabric.com).
+Built with 💙 by the team behind [Fabric](https://tryfabric.com). Adaptation and fixes by [Giobart](https://github.com/giobart)
