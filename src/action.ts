@@ -310,6 +310,11 @@ export async function run(options: Options) {
   const {notion, github} = options;
 
   core.info('Starting...');
+  
+  // Validate database ID
+  if (!notion.databaseId || notion.databaseId.length === 0) {
+    throw new Error('Notion database ID is not configured. Please set the notion-db input parameter.');
+  }
 
   const notionClient = new Client({
     auth: notion.token,
@@ -327,14 +332,22 @@ export async function run(options: Options) {
       octokit,
     });
   } else if (github.eventName === 'workflow_dispatch') {
-    const notion = new Client({auth: options.notion.token});
-    const {databaseId} = options.notion;
-    const issuePageIds = await createIssueMapping(notion, databaseId);
-    if (!github.payload.repository?.full_name) {
-      throw new Error('Unable to find repository name in github webhook context');
+    try {
+      const notion = new Client({auth: options.notion.token});
+      const {databaseId} = options.notion;
+      core.info(`Using Notion database ID: ${databaseId}`);
+      
+      const issuePageIds = await createIssueMapping(notion, databaseId);
+      if (!github.payload.repository?.full_name) {
+        throw new Error('Unable to find repository name in github webhook context');
+      }
+      const githubRepo = github.payload.repository.full_name;
+      await syncNotionDBWithGitHub(issuePageIds, octokit, notion, databaseId, githubRepo);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      core.error(`Workflow dispatch sync failed: ${errorMessage}`);
+      throw error;
     }
-    const githubRepo = github.payload.repository.full_name;
-    await syncNotionDBWithGitHub(issuePageIds, octokit, notion, databaseId, githubRepo);
   } else {
     await handleIssueEdited({
       notion: {
