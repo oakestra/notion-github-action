@@ -32513,44 +32513,64 @@ function createIssueMapping(notion, databaseId) {
 }
 function syncNotionDBWithGitHub(issuePageIds, octokit, notion, databaseId, githubRepo) {
     return __awaiter(this, void 0, void 0, function* () {
-        const issues = yield getGitHubIssues(octokit, githubRepo);
-        const pagesToCreate = getIssuesNotInNotion(issuePageIds, issues);
-        yield createPages(notion, databaseId, pagesToCreate, octokit);
+        try {
+            core.info(`Starting sync for repository: ${githubRepo}`);
+            const issues = yield getGitHubIssues(octokit, githubRepo);
+            core.info(`Found ${issues.length} total issues in GitHub`);
+            const pagesToCreate = getIssuesNotInNotion(issuePageIds, issues);
+            core.info(`${pagesToCreate.length} issues need to be added to Notion`);
+            yield createPages(notion, databaseId, pagesToCreate, octokit);
+            core.info('Sync completed successfully');
+        }
+        catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            core.error(`Sync failed: ${errorMessage}`);
+            throw error;
+        }
     });
 }
 // Notion SDK for JS: https://developers.notion.com/reference/post-database-query
 function getIssuesAlreadyInNotion(notion, databaseId) {
     return __awaiter(this, void 0, void 0, function* () {
         core.info('Checking for issues already in the database...');
-        const pages = [];
-        let cursor = undefined;
-        let next_cursor = 'true';
-        while (next_cursor) {
-            const response = yield notion.databases.query({
-                database_id: databaseId,
-                start_cursor: cursor,
+        try {
+            const pages = [];
+            let cursor = undefined;
+            let next_cursor = 'true';
+            while (next_cursor) {
+                const response = yield notion.databases.query({
+                    database_id: databaseId,
+                    start_cursor: cursor,
+                });
+                next_cursor = response.next_cursor;
+                const results = response.results;
+                pages.push(...results);
+                if (!next_cursor) {
+                    break;
+                }
+                cursor = next_cursor;
+            }
+            const res = [];
+            pages.forEach(page => {
+                if ('properties' in page) {
+                    let num = null;
+                    num = page.properties['Number'].number;
+                    if (typeof num !== 'undefined')
+                        res.push({
+                            pageId: page.id,
+                            issueNumber: num,
+                        });
+                }
             });
-            next_cursor = response.next_cursor;
-            const results = response.results;
-            pages.push(...results);
-            if (!next_cursor) {
-                break;
-            }
-            cursor = next_cursor;
+            core.info(`Found ${res.length} issues already in Notion database`);
+            return res;
         }
-        const res = [];
-        pages.forEach(page => {
-            if ('properties' in page) {
-                let num = null;
-                num = page.properties['Number'].number;
-                if (typeof num !== 'undefined')
-                    res.push({
-                        pageId: page.id,
-                        issueNumber: num,
-                    });
-            }
-        });
-        return res;
+        catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            core.error(`Failed to query Notion database: ${errorMessage}`);
+            core.error(`Database ID: ${databaseId}`);
+            throw error;
+        }
     });
 }
 // https://docs.github.com/en/rest/reference/issues#list-repository-issues
@@ -32598,12 +32618,34 @@ function getIssuesNotInNotion(issuePageIds, issues) {
 function createPages(notion, databaseId, pagesToCreate, octokit) {
     return __awaiter(this, void 0, void 0, function* () {
         core.info('Adding Github Issues to Notion...');
-        yield Promise.all(pagesToCreate.map((issue) => __awaiter(this, void 0, void 0, function* () {
-            return notion.pages.create({
-                parent: { database_id: databaseId },
-                properties: yield getPropertiesFromIssue(issue, octokit),
-            });
+        core.info(`Creating ${pagesToCreate.length} pages in Notion database`);
+        if (pagesToCreate.length === 0) {
+            core.info('No new issues to add to Notion');
+            return;
+        }
+        const results = yield Promise.allSettled(pagesToCreate.map((issue) => __awaiter(this, void 0, void 0, function* () {
+            try {
+                core.debug(`Creating page for issue #${issue.number}: ${issue.title}`);
+                yield notion.pages.create({
+                    parent: { database_id: databaseId },
+                    properties: yield getPropertiesFromIssue(issue, octokit),
+                });
+                core.info(`Successfully created page for issue #${issue.number}`);
+            }
+            catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                core.error(`Failed to create page for issue #${issue.number} (${issue.title}): ${errorMessage}`);
+                throw error;
+            }
         })));
+        // Check for failures
+        const failures = results.filter((r) => r.status === 'rejected');
+        if (failures.length > 0) {
+            core.error(`${failures.length} of ${pagesToCreate.length} pages failed to create`);
+            if (failures.length > 0) {
+                throw new Error(`Failed to create pages in Notion: ${String(failures[0].reason)}`);
+            }
+        }
     });
 }
 /*
@@ -32618,36 +32660,43 @@ function createMultiSelectObjects(issue) {
 }
 function getPropertiesFromIssue(issue, octokit) {
     return __awaiter(this, void 0, void 0, function* () {
-        const { number, title, state, id, milestone, created_at, updated_at, body, repository_url, user, html_url, } = issue;
-        const author = user === null || user === void 0 ? void 0 : user.login;
-        const { assigneesObject, labelsObject } = createMultiSelectObjects(issue);
-        const urlComponents = repository_url.split('/');
-        const org = urlComponents[urlComponents.length - 2];
-        const repo = urlComponents[urlComponents.length - 1];
-        const projectData = yield getProjectData({
-            octokit,
-            githubRepo: `${org}/${repo}`,
-            issueNumber: issue.number,
-        });
-        // These properties are specific to the template DB referenced in the README.
-        return {
-            Name: properties.title(title),
-            Status: properties.getStatusSelectOption(state),
-            Organization: properties.text(org),
-            Repository: properties.text(repo),
-            Body: properties.richText(parseBodyRichText(body || '')),
-            Number: properties.number(number),
-            Assignees: properties.multiSelect(assigneesObject),
-            Milestone: properties.text(milestone ? milestone.title : ''),
-            Labels: properties.multiSelect(labelsObject ? labelsObject : []),
-            Author: properties.text(author),
-            Created: properties.date(created_at),
-            Updated: properties.date(updated_at),
-            ID: properties.number(id),
-            Link: properties.url(html_url),
-            Project: properties.text((projectData === null || projectData === void 0 ? void 0 : projectData.name) || ''),
-            'Project Column': properties.text((projectData === null || projectData === void 0 ? void 0 : projectData.columnName) || ''),
-        };
+        try {
+            const { number, title, state, id, milestone, created_at, updated_at, body, repository_url, user, html_url, } = issue;
+            const author = user === null || user === void 0 ? void 0 : user.login;
+            const { assigneesObject, labelsObject } = createMultiSelectObjects(issue);
+            const urlComponents = repository_url.split('/');
+            const org = urlComponents[urlComponents.length - 2];
+            const repo = urlComponents[urlComponents.length - 1];
+            const projectData = yield getProjectData({
+                octokit,
+                githubRepo: `${org}/${repo}`,
+                issueNumber: issue.number,
+            });
+            // These properties are specific to the template DB referenced in the README.
+            return {
+                Name: properties.title(title),
+                Status: properties.getStatusSelectOption(state),
+                Organization: properties.text(org),
+                Repository: properties.text(repo),
+                Body: properties.richText(parseBodyRichText(body || '')),
+                Number: properties.number(number),
+                Assignees: properties.multiSelect(assigneesObject),
+                Milestone: properties.text(milestone ? milestone.title : ''),
+                Labels: properties.multiSelect(labelsObject ? labelsObject : []),
+                Author: properties.text(author),
+                Created: properties.date(created_at),
+                Updated: properties.date(updated_at),
+                ID: properties.number(id),
+                Link: properties.url(html_url),
+                Project: properties.text((projectData === null || projectData === void 0 ? void 0 : projectData.name) || ''),
+                'Project Column': properties.text((projectData === null || projectData === void 0 ? void 0 : projectData.columnName) || ''),
+            };
+        }
+        catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            core.error(`Failed to extract properties from issue #${issue.number}: ${errorMessage}`);
+            throw error;
+        }
     });
 }
 
@@ -32672,8 +32721,22 @@ var action_awaiter = (undefined && undefined.__awaiter) || function (thisArg, _a
 
 
 function removeHTML(text) {
-    var _a;
-    return (_a = text === null || text === void 0 ? void 0 : text.replace(/<.*>.*<\/.*>/g, '')) !== null && _a !== void 0 ? _a : '';
+    if (!text)
+        return '';
+    // Remove all HTML tags (both paired and self-closing)
+    return text
+        .replace(/<[^>]+>/g, '') // Remove all HTML tags
+        .replace(/\n\s*\n/g, '\n') // Normalize multiple newlines to single newlines
+        .trim();
+}
+function preprocessMarkdown(text) {
+    // Remove HTML comments
+    text = text.replace(/<!--[\s\S]*?-->/g, '');
+    // Convert heading markdown to bold text (e.g., "## Heading" -> "**Heading**")
+    text = text.replace(/^#+\s+(.+)$/gm, '**$1**');
+    // Handle markdown images [alt](url) by replacing with just the alt text
+    text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1 (image)');
+    return text;
 }
 function parsePropertiesFromPayload(options) {
     var _a, _b, _c, _d, _e, _f, _g;
@@ -32735,9 +32798,32 @@ function getProjectData(options) {
 }
 function parseBodyRichText(body) {
     try {
-        return (0,build_src.markdownToRichText)(removeHTML(body));
+        const cleanBody = removeHTML(body);
+        const processedBody = preprocessMarkdown(cleanBody);
+        return (0,build_src.markdownToRichText)(processedBody);
     }
-    catch (_a) {
+    catch (error) {
+        core.warning(`Failed to parse markdown: ${error instanceof Error ? error.message : String(error)}`);
+        // Fallback: return the text content as plain rich text
+        const cleanBody = removeHTML(body);
+        if (cleanBody.length > 0) {
+            return [
+                {
+                    type: 'text',
+                    text: {
+                        content: cleanBody.substring(0, 2000), // Notion has a 2000 char limit per block
+                    },
+                    annotations: {
+                        bold: false,
+                        strikethrough: false,
+                        underline: false,
+                        italic: false,
+                        code: false,
+                        color: 'default',
+                    },
+                },
+            ];
+        }
         return [];
     }
 }
@@ -32844,6 +32930,10 @@ function run(options) {
     return action_awaiter(this, void 0, void 0, function* () {
         const { notion, github } = options;
         core.info('Starting...');
+        // Validate database ID
+        if (!notion.databaseId || notion.databaseId.length === 0) {
+            throw new Error('Notion database ID is not configured. Please set the notion-db input parameter.');
+        }
         const notionClient = new src/* Client */.KU({
             auth: notion.token,
             logLevel: core.isDebug() ? src/* LogLevel.DEBUG */.in.DEBUG : src/* LogLevel.WARN */.in.WARN,
@@ -32860,14 +32950,22 @@ function run(options) {
             });
         }
         else if (github.eventName === 'workflow_dispatch') {
-            const notion = new src/* Client */.KU({ auth: options.notion.token });
-            const { databaseId } = options.notion;
-            const issuePageIds = yield createIssueMapping(notion, databaseId);
-            if (!((_a = github.payload.repository) === null || _a === void 0 ? void 0 : _a.full_name)) {
-                throw new Error('Unable to find repository name in github webhook context');
+            try {
+                const notion = new src/* Client */.KU({ auth: options.notion.token });
+                const { databaseId } = options.notion;
+                core.info(`Using Notion database ID: ${databaseId}`);
+                const issuePageIds = yield createIssueMapping(notion, databaseId);
+                if (!((_a = github.payload.repository) === null || _a === void 0 ? void 0 : _a.full_name)) {
+                    throw new Error('Unable to find repository name in github webhook context');
+                }
+                const githubRepo = github.payload.repository.full_name;
+                yield syncNotionDBWithGitHub(issuePageIds, octokit, notion, databaseId, githubRepo);
             }
-            const githubRepo = github.payload.repository.full_name;
-            yield syncNotionDBWithGitHub(issuePageIds, octokit, notion, databaseId, githubRepo);
+            catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                core.error(`Workflow dispatch sync failed: ${errorMessage}`);
+                throw error;
+            }
         }
         else {
             yield handleIssueEdited({
